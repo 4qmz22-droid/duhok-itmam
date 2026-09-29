@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>دليل وسوق دهوك التفاعلي</title>
+    
+    <!-- مكتبة الخرائط Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        body {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #f8f9fa;
+        }
+        header {
+            background: #0f172a;
+            color: #fff;
+            padding: 15px;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .controls {
+            background: #ffffff;
+            padding: 12px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            border-bottom: 1px solid #e2e8f0;
+            z-index: 1000;
+        }
+        input, select, button {
+            padding: 10px 14px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+        }
+        input, select {
+            flex: 1;
+            min-width: 160px;
+        }
+        button {
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button:hover {
+            background-color: #1d4ed8;
+        }
+        #map {
+            flex: 1;
+            width: 100%;
+        }
+        .add-shop-panel {
+            background: #fff;
+            padding: 12px;
+            border-top: 1px solid #e2e8f0;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .add-shop-panel input {
+            min-width: 120px;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h2>دليل سوق دهوك الكبير 📍</h2>
+    </header>
+
+    <!-- شريط التحكم والبحث والتتبع -->
+    <div class="controls">
+        <input type="text" id="searchInput" placeholder="ابحث عن محل أو بضاعة..." oninput="filterShops()">
+        <select id="categorySelect" onchange="filterShops()">
+            <option value="all">جميع التصنيفات</option>
+            <option value="أزياء">أزياء وملابس</option>
+            <option value="صرافة">صرافة وتحويل</option>
+            <option value="بهارات">عطارية وبهارات</option>
+            <option value="مطاعم">مطاعم ومقاهي</option>
+            <option value="إلكترونيات">إلكترونيات وشواحن</option>
+        </select>
+        <button onclick="toggleTracking()">📍 شغل / أوقف التتبع الحي</button>
+    </div>
+
+    <!-- الخريطة -->
+    <div id="map"></div>
+
+    <!-- لوحة إدخال محل جديد فورياً -->
+    <div class="add-shop-panel">
+        <input type="text" id="newShopName" placeholder="اسم المحل الجديد">
+        <select id="newShopCat">
+            <option value="أزياء">أزياء</option>
+            <option value="صرافة">صرافة</option>
+            <option value="بهارات">بهارات</option>
+            <option value="مطاعم">مطاعم</option>
+            <option value="إلكترونيات">إلكترونيات</option>
+        </select>
+        <input type="text" id="newShopDesc" placeholder="وصف قصير">
+        <button onclick="addShopFromUser()">➕ إضافته بموقعي الحالي</button>
+    </div>
+
+    <script>
+        // 1. إعداد الخريطة في سوق دهوك
+        const duhokCenter = [36.8617, 42.9886];
+        const map = L.map('map').setView(duhokCenter, 17);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        // 2. قائمة المحلات الأولية في السوق
+        let shops = [
+            { name: "سوق الأزياء الكردية", cat: "أزياء", lat: 36.8620, lng: 42.9888, desc: "ملابس تقليدية وأقمشة" },
+            { name: "صرافة دهوك المركزية", cat: "صرافة", lat: 36.8615, lng: 42.9882, desc: "تحويل ومعاملات مالية" },
+            { name: "توابل العافية", cat: "بهارات", lat: 36.8618, lng: 42.9892, desc: "أعشاب وبهارات نادرة" },
+            { name: "كباب دهوك القديم", cat: "مطاعم", lat: 36.8612, lng: 42.9880, desc: "مشويات وجبات شعبية" }
+        ];
+
+        let markers = [];
+        let userMarker = null;
+        let pathPolyline = L.polyline([], { color: 'red', weight: 4 }).addTo(map);
+        let watchId = null;
+        let currentUserPos = null;
+
+        // 3. عرض المحلات
+        function renderShops(list) {
+            markers.forEach(m => map.removeLayer(m));
+            markers = [];
+
+            list.forEach(shop => {
+                const marker = L.marker([shop.lat, shop.lng]).addTo(map);
+                marker.bindPopup(`
+                    <div style="direction: rtl; text-align: right;">
+                        <h3 style="margin-bottom: 4px; color:#2563eb;">${shop.name}</h3>
+                        <p><b>التصنيف:</b> ${shop.cat}</p>
+                        <p>${shop.desc}</p>
+                    </div>
+                `);
+                markers.push(marker);
+            });
+        }
+        renderShops(shops);
+
+        // 4. الفلترة والبحث
+        function filterShops() {
+            const query = document.getElementById('searchInput').value.toLowerCase();
+            const cat = document.getElementById('categorySelect').value;
+
+            const filtered = shops.filter(s => {
+                const matchText = s.name.toLowerCase().includes(query) || s.desc.toLowerCase().includes(query);
+                const matchCat = (cat === 'all' || s.cat === cat);
+                return matchText && matchCat;
+            });
+            renderShops(filtered);
+        }
+
+        // 5. نظام التتبع لحظة بلحظة (GPS)
+        function toggleTracking() {
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+                alert("تم إيقاف التتبع.");
+            } else {
+                if ("geolocation" in navigator) {
+                    watchId = navigator.geolocation.watchPosition(
+                        (position) => {
+                            const lat = position.coords.latitude;
+                            const lng = position.coords.longitude;
+                            currentUserPos = [lat, lng];
+
+                            if (!userMarker) {
+                                userMarker = L.circleMarker([lat, lng], {
+                                    radius: 9,
+                                    fillColor: "#2563eb",
+                                    color: "#ffffff",
+                                    weight: 2,
+                                    opacity: 1,
+                                    fillOpacity: 0.9
+                                }).addTo(map).bindPopup("موقعك الحالي").openPopup();
+                            } else {
+                                userMarker.setLatLng([lat, lng]);
+                            }
+
+                            pathPolyline.addLatLng([lat, lng]);
+                            map.setView([lat, lng], 18);
+                        },
+                        (err) => alert("يرجى السماح بالوصول لموقع الـ GPS."),
+                        { enableHighAccuracy: true }
+                    );
+                } else {
+                    alert("الهاتف لا يدعم تحديد الموقع.");
+                }
+            }
+        }
+
+        // 6. إضافة محل جديد حسب نقطة وقوفك
+        function addShopFromUser() {
+            const name = document.getElementById('newShopName').value.trim();
+            const cat = document.getElementById('newShopCat').value;
+            const desc = document.getElementById('newShopDesc').value.trim();
+
+            if (!name) {
+                alert("يرجى كتابة اسم المحل.");
+                return;
+            }
+            if (!currentUserPos) {
+                alert("شغّل التتبع وسر إلى المحل أولاً لتحديد موقعه بالإحداثيات.");
+                return;
+            }
+
+            const newShop = {
+                name: name,
+                cat: cat,
+                lat: currentUserPos[0],
+                lng: currentUserPos[1],
+                desc: desc || "محل جديد"
+            };
+
+            shops.push(newShop);
+            filterShops();
+            
+            document.getElementById('newShopName').value = '';
+            document.getElementById('newShopDesc').value = '';
+            alert("تم إدراج المحل في موضعك الحالي بنجاح!");
+        }
+    </script>
+</body>
+</html>
